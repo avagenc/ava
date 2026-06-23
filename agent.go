@@ -18,11 +18,6 @@ import (
 //go:embed internal/system-instruction.txt
 var systemInstruction string
 
-const (
-	name        = "ava"
-	description = "Avagenc Orchestrator Agent"
-)
-
 // SubAgent is a specialist Ava can delegate to. Ava knows only how to describe
 // it to the model (Name/Description) and how to hand it a message (Message) —
 // not how Message is fulfilled. The consumer (chat) implements Message by
@@ -33,7 +28,7 @@ const (
 type SubAgent interface {
 	Name() string
 	Description() string
-	Message(ctx context.Context, message string) (string, error)
+	Run(ctx context.Context, message string) (string, error)
 }
 
 // Config holds the dependencies a consumer must supply. Ava's identity and base
@@ -45,9 +40,6 @@ type Config struct {
 	// tool whose declaration is the specialist's Name/Description, so the model
 	// chooses delegation the same way it chooses any tool.
 	SubAgents []SubAgent
-	// Tools are extra domain capabilities Ava owns directly (e.g. self-recall,
-	// music). They are appended after the delegation tools.
-	Tools []adktool.Tool
 }
 
 // New builds the Ava agent — the Avagenc orchestrator. It returns a bare agent;
@@ -57,70 +49,47 @@ func New(cfg Config) (agent.Agent, error) {
 		return nil, fmt.Errorf("ava: model is required")
 	}
 
-	tools := make([]adktool.Tool, 0, len(cfg.SubAgents)+len(cfg.Tools))
-	for _, sub := range cfg.SubAgents {
-		t, err := delegationTool(sub)
+	tools := make([]adktool.Tool, 0, len(cfg.SubAgents))
+	for _, subAgent := range cfg.SubAgents {
+		t, err := subAgentToADKTool(subAgent)
 		if err != nil {
 			return nil, err
 		}
 		tools = append(tools, t)
 	}
-	tools = append(tools, cfg.Tools...)
 
 	instruction := "[SYSTEM_INSTRUCTION]" + systemInstruction + "\n[/SYSTEM_INSTRUCTION]"
 
-	a, err := llmagent.New(llmagent.Config{
-		Name:        name,
+	ava, err := llmagent.New(llmagent.Config{
+		Name:        "ava",
+		Description: "Avagenc Orchestrator Agent",
 		Model:       cfg.Model,
-		Description: description,
 		Instruction: instruction,
 		Tools:       tools,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ava: agent: %w", err)
 	}
-	return a, nil
+	return ava, nil
 }
 
-type delegationInput struct {
-	// Message is the instruction for the specialist. It may be empty: the
-	// specialist reads the shared session history and acts on it, so Ava need
+type subAgentToolArg struct {
+	// Message is the instruction for the specialist. It may be empty: If Ava knows that
+	// they are in chat session and specialist reads the shared
+	// session history and acts on it, so Ava need
 	// not restate context already visible there.
 	Message string `json:"message"`
 }
 
-type delegationOutput struct {
+type subAgentToolOutput struct {
 	Response string `json:"response"`
 }
 
-func delegationTool(sub SubAgent) (adktool.Tool, error) {
-	t, err := functiontool.New(
-		functiontool.Config{
-			Name:        sub.Name(),
-			Description: sub.Description(),
-		},
-		func(toolCtx adktool.Context, in delegationInput) (delegationOutput, error) {
-			ctx, err := delegationContext(toolCtx)
-			if err != nil {
-				return delegationOutput{}, err
-			}
-			reply, err := sub.Message(ctx, in.Message)
-			if err != nil {
-				return delegationOutput{}, fmt.Errorf("ava: delegate to %s: %w", sub.Name(), err)
-			}
-			return delegationOutput{Response: reply}, nil
-		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("ava: build delegation tool %q: %w", sub.Name(), err)
-	}
-	return t, nil
-}
 
-// delegationContext carries the human's identity, the shared session id, and the
+// toolCtxToCtx carries the human's identity, the shared session id, and the
 // timezone from Ava's tool-call context into the specialist's run, so the
 // specialist addresses the same Zep thread and localizes time identically.
-func delegationContext(toolCtx adktool.Context) (context.Context, error) {
+func toolCtxToCtx(toolCtx adktool.Context) (context.Context, error) {
 	userID := toolCtx.UserID()
 	if userID == "" {
 		return nil, fmt.Errorf("ava: delegation: missing user identity")
@@ -139,4 +108,28 @@ func delegationContext(toolCtx adktool.Context) (context.Context, error) {
 		ctx, _ = apitime.ContextWithZone(ctx, tz)
 	}
 	return ctx, nil
+}
+
+func subAgentToADKTool(subAgent SubAgent) (adktool.Tool, error) {
+	t, err := functiontool.New(
+		functiontool.Config{
+			Name:        subAgent.Name(),
+			Description: subAgent.Description(),
+		},
+		func(toolCtx adktool.Context, in subAgentToolArg) (subAgentToolOutput, error) {
+			ctx, err := toolCtxToCtx(toolCtx)
+			if err != nil {
+				return subAgentToolOutput{}, err
+			}
+			reply, err := subAgent.Run(ctx, in.Message)
+			if err != nil {
+				return subAgentToolOutput{}, fmt.Errorf("ava: delegate to %s: %w", subAgent.Name(), err)
+			}
+			return subAgentToolOutput{Response: reply}, nil
+		},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ava: build delegation tool %q: %w", subAgent.Name(), err)
+	}
+	return t, nil
 }
