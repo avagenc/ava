@@ -74,10 +74,9 @@ func New(cfg Config) (agent.Agent, error) {
 }
 
 type subAgentToolArg struct {
-	// Message is the instruction for the specialist. It may be empty: If Ava knows that
-	// they are in chat session and specialist reads the shared
-	// session history and acts on it, so Ava need
-	// not restate context already visible there.
+	// Message is the instruction for the specialist. It may be empty:
+	// Ava knows that they are in chat session and specialist reads the shared
+	// session history and acts on it, so Ava need not restate context already visible there.
 	Message string `json:"message"`
 }
 
@@ -89,7 +88,7 @@ type subAgentToolOutput struct {
 // toolCtxToCtx carries the human's identity, the shared session id, and the
 // timezone from Ava's tool-call context into the specialist's run, so the
 // specialist addresses the same Zep thread and localizes time identically.
-func toolCtxToCtx(toolCtx adktool.Context) (context.Context, error) {
+func toolCtxToCtx(toolCtx agent.ToolContext) (context.Context, error) {
 	userID := toolCtx.UserID()
 	if userID == "" {
 		return nil, fmt.Errorf("ava: delegation: missing user identity")
@@ -116,7 +115,7 @@ func subAgentToADKTool(subAgent SubAgent) (adktool.Tool, error) {
 			Name:        subAgent.Name(),
 			Description: subAgent.Description(),
 		},
-		func(toolCtx adktool.Context, in subAgentToolArg) (subAgentToolOutput, error) {
+		func(toolCtx agent.ToolContext, in subAgentToolArg) (subAgentToolOutput, error) {
 			ctx, err := toolCtxToCtx(toolCtx)
 			if err != nil {
 				return subAgentToolOutput{}, err
