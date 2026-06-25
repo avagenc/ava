@@ -8,6 +8,8 @@ import (
 	apisess "go.naturallyfunny.dev/api/session"
 	apitime "go.naturallyfunny.dev/api/time"
 	apiuser "go.naturallyfunny.dev/api/user"
+	"go.naturallyfunny.dev/postera"
+	posteraadk "go.naturallyfunny.dev/adk/postera"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -15,7 +17,7 @@ import (
 	"google.golang.org/adk/tool/functiontool"
 )
 
-//go:embed internal/system-instruction.txt
+//go:embed internal/instruction.txt
 var systemInstruction string
 
 // SubAgent is a specialist Ava can delegate to. Ava knows only how to describe
@@ -36,6 +38,7 @@ type SubAgent interface {
 // voice, recall) is the consumer's concern, applied on the runner it owns.
 type Config struct {
 	Model model.LLM
+	Postarius *postera.Postarius
 	// SubAgents are the specialists Ava can delegate to. Each is wired as an ADK
 	// tool whose declaration is the specialist's Name/Description, so the model
 	// chooses delegation the same way it chooses any tool.
@@ -47,6 +50,9 @@ type Config struct {
 func New(cfg Config) (agent.Agent, error) {
 	if cfg.Model == nil {
 		return nil, fmt.Errorf("ava: model is required")
+	}
+	if cfg.Postarius == nil {
+		return nil, fmt.Errorf("ava: postarius is required")
 	}
 
 	tools := make([]adktool.Tool, 0, len(cfg.SubAgents))
@@ -83,7 +89,6 @@ type subAgentToolArg struct {
 type subAgentToolOutput struct {
 	Response string `json:"response"`
 }
-
 
 // toolCtxToCtx carries the human's identity, the shared session id, and the
 // timezone from Ava's tool-call context into the specialist's run, so the
