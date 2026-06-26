@@ -37,12 +37,16 @@ type SubAgent interface {
 // system instruction are owned by the module. Per-channel instruction (text,
 // voice, recall) is the consumer's concern, applied on the runner it owns.
 type Config struct {
-	Model model.LLM
+	Model     model.LLM
 	Postarius *postera.Postarius
 	// SubAgents are the specialists Ava can delegate to. Each is wired as an ADK
 	// tool whose declaration is the specialist's Name/Description, so the model
 	// chooses delegation the same way it chooses any tool.
 	SubAgents []SubAgent
+	// AdditionalInstruction is appended to Ava's base system instruction.
+	// Use it to supply channel-specific or deployment-specific context that
+	// the module itself cannot know (e.g. active participants in this channel).
+	AdditionalInstruction string
 }
 
 // New builds the Ava agent — the Avagenc orchestrator. It returns a bare agent;
@@ -55,7 +59,16 @@ func New(cfg Config) (agent.Agent, error) {
 		return nil, fmt.Errorf("ava: postarius is required")
 	}
 
-	tools := make([]adktool.Tool, 0, len(cfg.SubAgents))
+	// Self-recall (prospective memory): Postarius-backed tools let Ava schedule
+	// notes to its future self. The Cloud Tasks callback that fires them is the
+	// consumer's concern (see chat's AvaHandler.Awaken).
+	posteraTools, err := posteraadk.Tools(cfg.Postarius)
+	if err != nil {
+		return nil, fmt.Errorf("ava: postera tools: %w", err)
+	}
+
+	tools := make([]adktool.Tool, 0, len(cfg.SubAgents)+len(posteraTools))
+	tools = append(tools, posteraTools...)
 	for _, subAgent := range cfg.SubAgents {
 		t, err := subAgentToADKTool(subAgent)
 		if err != nil {
@@ -65,6 +78,9 @@ func New(cfg Config) (agent.Agent, error) {
 	}
 
 	instruction := "[SYSTEM_INSTRUCTION]" + systemInstruction + "\n[/SYSTEM_INSTRUCTION]"
+	if cfg.AdditionalInstruction != "" {
+		instruction = "[SYSTEM_INSTRUCTION]" + systemInstruction + "\n\n" + cfg.AdditionalInstruction + "\n[/SYSTEM_INSTRUCTION]"
+	}
 
 	ava, err := llmagent.New(llmagent.Config{
 		Name:        "ava",
