@@ -5,11 +5,11 @@ import (
 	_ "embed"
 	"fmt"
 
+	posteraadk "go.naturallyfunny.dev/agentkit/postera/adk"
 	apisess "go.naturallyfunny.dev/api/session"
 	apitime "go.naturallyfunny.dev/api/time"
 	apiuser "go.naturallyfunny.dev/api/user"
 	"go.naturallyfunny.dev/postera"
-	posteraadk "go.naturallyfunny.dev/adk/postera"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -20,37 +20,19 @@ import (
 //go:embed internal/instruction.txt
 var systemInstruction string
 
-// SubAgent is a specialist Ava can delegate to. Ava knows only how to describe
-// it to the model (Name/Description) and how to hand it a message (Message) —
-// not how Message is fulfilled. The consumer (chat) implements Message by
-// running the specialist's own in-process runner on the shared session, so the
-// specialist persists its own turn (authored as itself), reads the full shared
-// history, and decides independently how — or whether — to reply. This is the
-// in-process successor to the old HTTP AgentClient: same contract, no network.
 type SubAgent interface {
 	Name() string
 	Description() string
 	Run(ctx context.Context, message string) (string, error)
 }
 
-// Config holds the dependencies a consumer must supply. Ava's identity and base
-// system instruction are owned by the module. Per-channel instruction (text,
-// voice, recall) is the consumer's concern, applied on the runner it owns.
 type Config struct {
-	Model     model.LLM
-	Postarius *postera.Postarius
-	// SubAgents are the specialists Ava can delegate to. Each is wired as an ADK
-	// tool whose declaration is the specialist's Name/Description, so the model
-	// chooses delegation the same way it chooses any tool.
-	SubAgents []SubAgent
-	// AdditionalInstruction is appended to Ava's base system instruction.
-	// Use it to supply channel-specific or deployment-specific context that
-	// the module itself cannot know (e.g. active participants in this channel).
+	Model                 model.LLM
+	Postarius             *postera.Postarius
+	SubAgents             []SubAgent
 	AdditionalInstruction string
 }
 
-// New builds the Ava agent — the Avagenc orchestrator. It returns a bare agent;
-// running it (runner, session, per-channel instruction) is the consumer's job.
 func New(cfg Config) (agent.Agent, error) {
 	if cfg.Model == nil {
 		return nil, fmt.Errorf("ava: model is required")
@@ -59,9 +41,6 @@ func New(cfg Config) (agent.Agent, error) {
 		return nil, fmt.Errorf("ava: postarius is required")
 	}
 
-	// Self-recall (prospective memory): Postarius-backed tools let Ava schedule
-	// notes to its future self. The Cloud Tasks callback that fires them is the
-	// consumer's concern (see chat's AvaHandler.Awaken).
 	posteraTools, err := posteraadk.Tools(cfg.Postarius)
 	if err != nil {
 		return nil, fmt.Errorf("ava: postera tools: %w", err)
@@ -96,9 +75,6 @@ func New(cfg Config) (agent.Agent, error) {
 }
 
 type subAgentToolArg struct {
-	// Message is the instruction for the specialist. It may be empty:
-	// Ava knows that they are in chat session and specialist reads the shared
-	// session history and acts on it, so Ava need not restate context already visible there.
 	Message string `json:"message"`
 }
 
@@ -106,9 +82,6 @@ type subAgentToolOutput struct {
 	Response string `json:"response"`
 }
 
-// toolCtxToCtx carries the human's identity, the shared session id, and the
-// timezone from Ava's tool-call context into the specialist's run, so the
-// specialist addresses the same Zep thread and localizes time identically.
 func toolCtxToCtx(toolCtx agent.ToolContext) (context.Context, error) {
 	userID := toolCtx.UserID()
 	if userID == "" {
